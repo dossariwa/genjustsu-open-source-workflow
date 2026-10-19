@@ -1,26 +1,45 @@
-"""Project-local credentials only; environment values take precedence."""
+"""Project-local configuration; environment values take precedence."""
 import os
 from pathlib import Path
-ROOT=Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent
+DEFAULTS = {
+    'OPENAI_VISION_MODEL': 'gpt-4o',
+    'AUDIO_DISGUISE_MODE': 'pitch_shift',
+    'FINAL_AUDIO_SOURCE': 'original',
+    'OPENART_CLI_BIN': 'openart',
+    'OPENART_DRAFT_MODEL': 'byte-plus-seedance-2-5-draft',
+    'OPENART_DRAFT_RESOLUTION': '480p',
+    # Retained only to collect jobs created before the OpenArt migration.
+    'DREAMINA_CLI_BIN': 'dreamina-canvas',
+    'DREAMINA_DRAFT_MODEL': 'seedance_2.0_mini',
+    'DREAMINA_HD_MODEL': 'seedance_2.5',
+    'DREAMINA_DRAFT_RESOLUTION': '720p',
+    'DREAMINA_HD_RESOLUTION': '1080p',
+    'HF_DEPTH_SPACE': 'depth-anything/Video-Depth-Anything',
+    'HF_DEPTH_API_NAME': '/infer_video_depth',
+    'HF_SAM_SPACE': 'merve/SAM3-video-segmentation',
+}
 
 def load_env():
-    path=ROOT/'.env'
+    path = ROOT / '.env'
     if path.exists():
         for line in path.read_text().splitlines():
-            if not line.strip() or line.lstrip().startswith('#'):continue
-            key,sep,value=line.partition('=')
-            if sep:os.environ.setdefault(key.strip(),value.strip().strip('\"').strip("'"))
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            key, sep, value = line.partition('=')
+            if sep:
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    token = os.getenv('HF_ACCESS_TOKEN') or os.getenv('HF_TOKEN')
+    if token:
+        os.environ['HF_ACCESS_TOKEN'] = token
+        os.environ['HF_TOKEN'] = token
 
-def setting(name,default=''):
+def setting(name, default=''):
     load_env()
-    value=os.getenv(name,default)
-    if name=='ENHANCOR_WEBHOOK_URL' and not value:
-        import json
-        try:value=json.loads((ROOT/'.runtime-webhook.json').read_text())['url']
-        except (OSError,ValueError,KeyError):pass
-    return value
+    return os.getenv(name, default or DEFAULTS.get(name, ''))
 
 def credential(name):
-    value=setting(name)
-    if not value:raise ValueError(f'Set {name} in this project’s .env file.')
+    value = setting(name).strip()
+    if not value:
+        raise ValueError(f'Set {name} in this project’s .env file.')
     return value

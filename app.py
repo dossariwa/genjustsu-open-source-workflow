@@ -1,162 +1,378 @@
+"""Local workflow UI; remote calls occur only in explicitly requested jobs."""
 from pathlib import Path
-import threading,uuid,shutil,json
-from fastapi import FastAPI,UploadFile,File,Form,HTTPException
+import json
+import shutil
+import threading
+import uuid
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pipeline import run
-ROOT=Path(__file__).resolve().parent
-RUNS=ROOT/'runs';RUNS.mkdir(exist_ok=True)
-app=FastAPI();jobs={}
+from config import ROOT, setting
+
+RUNS = ROOT / 'runs'
+RUNS.mkdir(exist_ok=True)
+app = FastAPI()
+jobs, hd_jobs = {}, {}
+mutation_lock = threading.Lock()
+collecting = set()
+
+
+def save_json(path, data):
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(data, indent=2))
+    temporary.replace(path)
+
+
+def job_folder(ident):
+    if len(ident) != 32 or any(c not in '0123456789abcdef' for c in ident):
+        raise HTTPException(404, 'Unknown job')
+    folder = RUNS / ident
+    if not folder.is_dir():
+        raise HTTPException(404, 'Unknown job')
+    return folder
+
+
+def update(folder, **values):
+    registry = hd_jobs if folder.name == 'hd' else jobs
+    ident = folder.parent.name if folder.name == 'hd' else folder.name
+    data = registry.setdefault(ident, {'id': ident})
+    data.update(values)
+    save_json(folder / 'status.json', data)
+    return dict(data)
+
+
+def failure(exc):
+    # Do not echo remote payloads or credential-bearing URLs into the UI.
+    if isinstance(exc, (ValueError, RuntimeError)):
+        return str(exc)[:600]
+    return f'{type(exc).__name__}: operation failed; inspect configuration and resume saved work.'
+
+
 @app.get('/')
-def index():return FileResponse(ROOT/'static/index.html')
+def index():
+    return FileResponse(ROOT / 'static/index.html')
+
+
+@app.get('/capabilities')
+def capabilities():
+    from seedance_bridge import capabilities as bridge_capabilities, ProviderError
+    from raw_masks import configuration_status
+    try:
+        generation = bridge_capabilities()
+    except ProviderError:
+        generation = {'provider': 'openart', 'mode': 'element2video', 'video_hd_supported': False,
+                      'available': False, 'detail': 'OpenArt connection unavailable; run doctor.py.'}
+    return {'generation': generation, 'segmentation': configuration_status(),
+            'final_audio_source': setting('FINAL_AUDIO_SOURCE', 'original')}
+
+
 @app.post('/jobs')
-def create(video:UploadFile=File(...),prompt:str=Form('person'),provider:str=Form('replicate'),mode:str=Form('depth')):
-    if mode not in ['depth','face_mesh','depth_mesh']:raise HTTPException(400,'Unknown workflow mode')
-    if provider not in ['huggingface','replicate','replicate-chenxwh']:raise HTTPException(400,'Unknown provider')
-    ident=uuid.uuid4().hex;folder=RUNS/ident;folder.mkdir();src=folder/'upload.mp4'
-    with src.open('wb') as out:shutil.copyfileobj(video.file,out)
-    jobs[ident]={'state':'running','status':'Starting','id':ident}
+def create(video: UploadFile = File(...), prompt: str = Form('person'),
+           provider: str = Form('huggingface'), mode: str = Form('depth')):
+    if mode not in ('depth', 'face_mesh', 'depth_mesh'):
+        raise HTTPException(400, 'Unknown preparation mode')
+    if provider != 'huggingface':
+        raise HTTPException(400, 'Only Hugging Face cloud preparation is supported.')
+    if mode != 'face_mesh':
+        from raw_masks import configuration_status
+        readiness = configuration_status()
+        if not readiness['ready']:
+            raise HTTPException(409, readiness['detail'])
+    ident = uuid.uuid4().hex
+    folder = RUNS / ident
+    folder.mkdir()
+    src = folder / 'upload.mp4'
+    with src.open('wb') as out:
+        shutil.copyfileobj(video.file, out)
+    update(folder, state='running', status='Starting preparation')
+
     def work():
         try:
-            if mode=='face_mesh':
-                from face_mesh import run as run_mesh
-                run_mesh(src,folder,lambda s:jobs[ident].update(status=s))
-            elif mode=='depth_mesh':
+            progress = lambda message: update(folder, status=message)
+            if mode == 'face_mesh':
+                from face_mesh import run
+                run(src, folder, progress)
+            elif mode == 'depth_mesh':
                 from face_mesh import run_depth
-                run_depth(src,folder,prompt,provider,lambda s:jobs[ident].update(status=s))
-            else:run(src,folder,prompt,provider,lambda s:jobs[ident].update(status=s))
-            jobs[ident].update(state='done',status='Preparation complete · input review required')
-            (folder/'status.json').write_text(json.dumps(jobs[ident]))
-        except Exception as e:
-            jobs[ident].update(state='error',status=str(e))
-            (folder/'status.json').write_text(json.dumps(jobs[ident]))
-    threading.Thread(target=work,daemon=True).start();return jobs[ident]
-@app.get('/jobs/{ident}')
-def get(ident:str):
-    if ident not in jobs:
-        if len(ident)==32 and all(c in '0123456789abcdef' for c in ident) and (RUNS/ident/'status.json').exists():return json.loads((RUNS/ident/'status.json').read_text())
-        raise HTTPException(404)
+                run_depth(src, folder, prompt, provider, progress)
+            else:
+                from pipeline import run
+                run(src, folder, prompt, provider, progress)
+            update(folder, state='done', status='Preparation complete · full-clip review required')
+        except Exception as exc:
+            update(folder, state='error', status=failure(exc))
+    threading.Thread(target=work, daemon=True).start()
     return jobs[ident]
-@app.post('/jobs/{ident}/seedance')
-def seedance(ident:str,prompt:str=Form(...),sirio:UploadFile=File(...),tein:UploadFile|None=File(None)):
-    if len(ident)!=32 or not all(c in '0123456789abcdef' for c in ident):raise HTTPException(404)
-    folder=RUNS/ident
-    if not (folder/'audio-manifest.json').exists():raise HTTPException(400,'Audio separation must complete first.')
-    from mask_review import require_approved
-    try:require_approved(folder)
-    except ValueError as e:raise HTTPException(409,str(e))
-    paths=[]
-    for name,upload in [('sirio-reference',sirio),('tein-reference',tein)]:
-        if upload is None:
-            paths.append(None)
-            continue
-        suffix=Path(upload.filename or '').suffix.lower()
-        if suffix not in (['.png','.jpg','.jpeg','.webp','.mp4','.mov','.webm'] if name=='sirio-reference' else ['.png','.jpg','.jpeg','.webp']):raise HTTPException(400,'Use an image or a Sirio reference video.')
-        path=folder/(name+suffix)
-        with path.open('wb') as f:shutil.copyfileobj(upload.file,f)
-        paths.append(path)
-    from seedance_bridge import submit
-    try:request_id=submit(folder,prompt,*paths)
-    except Exception as e:raise HTTPException(502,str(e))
-    jobs[ident]={'id':ident,'state':'running','status':'Seedance rendering: '+request_id}
+
+
+@app.get('/jobs/{ident}')
+def get(ident: str):
+    folder = job_folder(ident)
+    if ident in jobs:
+        return jobs[ident]
+    saved = folder / 'status.json'
+    if saved.exists():
+        return json.loads(saved.read_text())
+    return {'id': ident, 'state': 'idle', 'status': 'No saved operation'}
+
+
+def start_collection(folder, submit_id):
+    key = str(folder)
+    if key in collecting:
+        return
+    collecting.add(key)
+    update(folder, state='running', status='Collecting saved generation ' + submit_id)
     def collect():
         from seedance_bridge import wait_and_finish
         try:
-            wait_and_finish(folder,request_id,lambda s:jobs[ident].update(status=s))
-            jobs[ident].update(state='done',status='Final preview ready · entire original source audio',final_url='/runs/'+ident+'/final-preview.mp4')
-        except Exception as e:jobs[ident].update(state='error',status=str(e))
-        (folder/'status.json').write_text(json.dumps(jobs[ident]))
-    threading.Thread(target=collect,daemon=True).start()
-    return {'request_id':request_id,'id':ident,'state':'running','status':jobs[ident]['status']}
+            wait_and_finish(folder, submit_id, lambda message: update(folder, status=message))
+            update(folder, state='done', status='Final preview ready · configured source audio restored',
+                   final_url='/runs/' + folder.relative_to(RUNS).as_posix() + '/final-preview.mp4')
+        except Exception as exc:
+            update(folder, state='error', status=failure(exc))
+        finally:
+            collecting.discard(key)
+    threading.Thread(target=collect, daemon=True).start()
+
+
+def store_references(folder, primary, secondary=None):
+    paths = []
+    for name, upload in [('sirio', primary), ('tein', secondary)]:
+        if upload is None:
+            for previous in folder.glob(name + '-reference.*'):
+                previous.unlink()
+            paths.append(None)
+            continue
+        suffix = Path(upload.filename or '').suffix.lower()
+        allowed = {'.png', '.jpg', '.jpeg', '.webp'} | ({'.mp4', '.mov', '.webm'} if name == 'sirio' else set())
+        if suffix not in allowed:
+            raise HTTPException(400, 'Use a supported image, or a video for Character 1.')
+        path = folder / (name + '-reference' + suffix)
+        with path.open('wb') as output:
+            shutil.copyfileobj(upload.file, output)
+        for previous in folder.glob(name + '-reference.*'):
+            if previous != path:
+                previous.unlink()
+        paths.append(path)
+    return paths
+
+
+@app.post('/jobs/{ident}/prompt')
+def suggest_prompt(ident: str, sirio: UploadFile = File(...), tein: UploadFile | None = File(None)):
+    with mutation_lock:
+        return _suggest_prompt(ident, sirio, tein)
+
+
+def _suggest_prompt(ident, sirio, tein):
+    from openai_helper import generate_seedance_prompt, sample_video_frames
+    from mask_review import fingerprint
+    from seedance_bridge import state_filename
+    folder = job_folder(ident)
+    if (folder / state_filename(folder)).exists():
+        raise HTTPException(409, 'A generation is already saved; its prompt is frozen.')
+    # Video identity is never silently converted to stills.
+    if Path(sirio.filename or '').suffix.lower() in {'.mp4', '.mov', '.webm'}:
+        raise HTTPException(400, 'Video identity stays a video. Write its appearance-only prompt manually.')
+    if not (folder / 'original.mp4').exists():
+        raise HTTPException(409, 'Prepare the source first.')
+    try:
+        current = fingerprint(folder)
+    except ValueError:
+        raise HTTPException(409, 'Complete preparation, including guidance audio and transcription, before suggesting a prompt.') from None
+    references = [path for path in store_references(folder, sirio, tein) if path]
+    try:
+        frames = sample_video_frames(folder / 'original.mp4', folder / 'scene-samples', count=1)
+        transcript = folder / 'dialogue.txt'
+        mode_file = folder / 'workflow-mode.json'
+        mode = json.loads(mode_file.read_text()).get('mode', 'depth') if mode_file.exists() else 'depth'
+        prompt = generate_seedance_prompt(frames[0], references, transcript.read_text() if transcript.exists() else '', mode)
+        if fingerprint(folder) != current:
+            raise ValueError('Artifacts changed during prompt generation. Request a fresh suggestion.')
+        save_json(folder / 'prompt-suggestion.json', {'prompt': prompt, 'mode': mode, 'fingerprint': current})
+        return {'prompt': prompt}
+    except Exception as exc:
+        raise HTTPException(502, failure(exc)) from None
+
+
+@app.post('/jobs/{ident}/audit')
+def audit(ident: str):
+    from openai_helper import auto_audit_mask_quality, sample_video_frames
+    from mask_review import fingerprint
+    folder = job_folder(ident)
+    try:
+        current = fingerprint(folder)
+        frames = sample_video_frames(folder / 'composite-silent.mp4', folder / 'audit-samples')
+        result = auto_audit_mask_quality(frames)
+        if fingerprint(folder) != current:
+            raise ValueError('Artifacts changed during the audit. Run a fresh audit.')
+        result['fingerprint'] = current
+        save_json(folder / 'mask-audit.json', result)
+        return result
+    except Exception as exc:
+        raise HTTPException(502, failure(exc)) from None
+
+
+@app.post('/jobs/{ident}/seedance')
+def seedance(ident: str, prompt: str = Form(...), sirio: UploadFile = File(...), tein: UploadFile | None = File(None)):
+    folder = job_folder(ident)
+    from seedance_bridge import submit, CreditApprovalRequired, state_filename
+    from mask_review import require_approved
+    with mutation_lock:
+        try:
+            require_approved(folder)
+            if (folder / state_filename(folder)).exists():
+                raise ValueError('This job has saved provider work. Resume it instead of submitting again.')
+            paths = store_references(folder, sirio, tein)
+            submit_id = submit(folder, prompt, *paths)
+        except CreditApprovalRequired as exc:
+            return update(folder, state='awaiting_credit_approval', status=str(exc),
+                          minimum_credit_ceiling=exc.minimum_credit_ceiling)
+        except Exception as exc:
+            update(folder, state='error', status=failure(exc))
+            raise HTTPException(409, failure(exc)) from None
+        start_collection(folder, submit_id)
+    return jobs[ident]
+
+
+@app.post('/jobs/{ident}/credit-approval')
+def approve_credit(ident: str, credit_ceiling: int = Form(...)):
+    from seedance_bridge import resume_approved, CreditApprovalRequired
+    folder = job_folder(ident)
+    with mutation_lock:
+        try:
+            submit_id = resume_approved(folder, credit_ceiling)
+        except CreditApprovalRequired as exc:
+            return update(folder, state='awaiting_credit_approval', status=str(exc), minimum_credit_ceiling=exc.minimum_credit_ceiling)
+        except Exception as exc:
+            raise HTTPException(409, failure(exc)) from None
+        start_collection(folder, submit_id)
+    return jobs[ident]
+
+
+@app.post('/jobs/{ident}/resume')
+def resume(ident: str):
+    from seedance_bridge import state_filename
+    folder = job_folder(ident)
+    saved = folder / state_filename(folder)
+    if not saved.exists():
+        raise HTTPException(409, 'No saved generation to collect.')
+    data = json.loads(saved.read_text())
+    submit_id = data.get('history_id') or data.get('submit_id') or data.get('submitId')
+    if not submit_id:
+        raise HTTPException(409, 'Saved operation has no generation ID; inspect its provider history before retrying.')
+    start_collection(folder, submit_id)
+    return jobs[ident]
+
+
+@app.post('/jobs/{ident}/resume-preparation')
+def resume_preparation(ident: str):
+    """Explicitly finish saved preparation and quote; never authorize a run."""
+    from seedance_bridge import resume_preparation as prepare_saved, CreditApprovalRequired
+    folder = job_folder(ident)
+    with mutation_lock:
+        try:
+            prepare_saved(folder)
+        except CreditApprovalRequired as exc:
+            return update(folder, state='awaiting_credit_approval', status=str(exc), minimum_credit_ceiling=exc.minimum_credit_ceiling)
+        except Exception as exc:
+            raise HTTPException(409, failure(exc)) from None
+    raise HTTPException(409, 'Preparation did not produce a credit quote. Inspect the saved operation.')
+
 
 @app.post('/jobs/{ident}/finish')
-def finish(ident:str,video:UploadFile=File(...)):
-    if len(ident)!=32 or not all(c in '0123456789abcdef' for c in ident):raise HTTPException(404)
-    folder=RUNS/ident
-    if not (folder/'upload.mp4').exists():raise HTTPException(400,'Original source is required.')
-    target=folder/'seedance-result.mp4'
-    with target.open('wb') as f:shutil.copyfileobj(video.file,f)
+def finish(ident: str, video: UploadFile = File(...)):
+    folder = job_folder(ident)
+    target = folder / 'seedance-result.mp4'
+    with target.open('wb') as output:
+        shutil.copyfileobj(video.file, output)
     from audio_workflow import finish_preview
-    try:finish_preview(target,folder)
-    except Exception as e:raise HTTPException(400,str(e))
-    return {'url':'/runs/'+ident+'/final-preview.mp4'}
+    try:
+        finish_preview(target, folder)
+        update(folder, state='done', status='Imported result ready · configured source audio restored')
+    except Exception as exc:
+        raise HTTPException(400, failure(exc)) from None
+    return {'url': '/runs/' + ident + '/final-preview.mp4'}
 
-app.mount('/runs' ,StaticFiles(directory=RUNS),name='runs')
-
-hd_jobs={}
-hd_lock=threading.Lock()
-
-def hd_folder(ident):
-    if len(ident)!=32 or not all(c in '0123456789abcdef' for c in ident):raise HTTPException(404)
-    folder=RUNS/ident
-    if not folder.exists():raise HTTPException(404)
-    return folder
 
 @app.get('/jobs/{ident}/hd')
-def get_hd(ident:str):
-    folder=hd_folder(ident)
-    if ident in hd_jobs:return hd_jobs[ident]
-    saved=folder/'hd/status.json'
-    if saved.exists():return json.loads(saved.read_text())
-    return {'state':'idle','status':'Approve your draft to generate 1080p.'}
+def get_hd(ident: str):
+    folder = job_folder(ident)
+    if ident in hd_jobs:
+        return hd_jobs[ident]
+    saved = folder / 'hd/status.json'
+    return json.loads(saved.read_text()) if saved.exists() else {'state': 'idle', 'status': 'HD completion requires a verified provider upgrade contract and explicit approval.'}
+
 
 @app.post('/jobs/{ident}/hd')
-def create_hd(ident:str):
-    folder=hd_folder(ident)
-    with hd_lock:
-        previous=get_hd(ident)
-        if previous['state'] in ['running','done']:return previous
-        if not (folder/'final-preview.mp4').exists():raise HTTPException(400,'Complete and review a draft first.')
-        hd=folder/'hd';hd.mkdir(exist_ok=True)
-        hd_jobs[ident]={'state':'running','status':'Submitting approved draft for 1080p','id':ident}
-        def save(): (hd/'status.json').write_text(json.dumps(hd_jobs[ident]))
-        save()
-    def work_hd():
-        from seedance_bridge import submit_hd,wait_and_finish
+def create_hd(ident: str):
+    from seedance_bridge import submit_hd
+    folder = job_folder(ident)
+    with mutation_lock:
         try:
-            request_id=submit_hd(folder)
-            hd_jobs[ident].update(request_id=request_id,status='Generating 1080p through Enhancor');save()
-            wait_and_finish(hd,request_id,lambda s:hd_jobs[ident].update(status=s))
-            hd_jobs[ident].update(state='done',status='1080p ready · original source audio restored')
-        except Exception as e:hd_jobs[ident].update(state='error',status=str(e))
-        save()
-    threading.Thread(target=work_hd,daemon=True).start()
+            submit_id = submit_hd(folder, approved=True)
+        except Exception as exc:
+            raise HTTPException(409, failure(exc)) from None
+        start_collection(folder / 'hd', submit_id)
     return hd_jobs[ident]
 
+
 @app.get('/jobs/{ident}/mask-review')
-def get_mask_review(ident:str):
+def get_mask_review(ident: str):
     from mask_review import state
-    return state(hd_folder(ident))
+    folder = job_folder(ident)
+    result = state(folder)
+    audit_file = folder / 'mask-audit.json'
+    if audit_file.exists():
+        try:
+            audit = json.loads(audit_file.read_text())
+        except (ValueError, OSError):
+            audit = {}
+        if audit.get('fingerprint') == result.get('fingerprint'):
+            result = {**result, 'audit': audit}
+    return result
+
 
 @app.post('/jobs/{ident}/mask-review')
-def save_mask_review(ident:str,approved:bool=Form(...),fingerprint:str=Form(...),note:str=Form('')):
+def save_mask_review(ident: str, approved: bool = Form(...), fingerprint: str = Form(...), note: str = Form('')):
     from mask_review import review
-    try:return review(hd_folder(ident),approved,note,fingerprint)
-    except ValueError as e:raise HTTPException(409,str(e))
+    try:
+        return review(job_folder(ident), approved, note, fingerprint)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
 
-app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
 
 @app.on_event('startup')
 def resume_saved_generations():
-    """Resume collection only: never requeue a paid prediction on restart."""
-    from seedance_bridge import wait_and_finish
-    for root in RUNS.iterdir():
-        if not root.is_dir() or len(root.name)!=32:continue
-        for folder,response_file,registry in [(root,'seedance-response.json',jobs),(root/'hd','response.json',hd_jobs)]:
-            response=folder/response_file
-            if not response.exists() or (folder/'final-preview.mp4').exists():continue
-            try:request_id=json.loads(response.read_text()).get('requestId')
-            except (ValueError,OSError):continue
-            if not request_id:continue
-            registry[root.name]={'id':root.name,'state':'running','status':'Resuming saved request '+request_id}
-            def collect_saved(folder=folder,ident=root.name,request_id=request_id,registry=registry):
-                try:
-                    wait_and_finish(folder,request_id,lambda message:registry[ident].update(status=message))
-                    registry[ident].update(state='done',status='Final preview ready · original source audio')
-                except Exception as e:registry[ident].update(state='error',status=str(e))
-                (folder/'status.json').write_text(json.dumps(registry[ident]))
-            threading.Thread(target=collect_saved,daemon=True).start()
+    """Observe saved identities only. Startup can never launch or approve a run."""
+    from seedance_bridge import state_filename
+    for folder in RUNS.iterdir():
+        if not folder.is_dir() or len(folder.name) != 32:
+            continue
+        saved = folder / state_filename(folder)
+        if saved.exists() and not (folder / 'final-preview.mp4').exists():
+            try:
+                data = json.loads(saved.read_text())
+                submit_id = data.get('history_id') or data.get('submit_id') or data.get('submitId')
+                stage = data.get('state') or data.get('status')
+                if stage == 'awaiting_credit_approval':
+                    provider = 'Dreamina' if saved.name == 'dreamina-state.json' else 'OpenArt'
+                    update(folder, state=stage, status=provider + ' requires credit approval.', minimum_credit_ceiling=data.get('minimum_credit_ceiling'))
+                elif submit_id and stage in {'submitted', 'accepted', 'running', 'pending', 'uncertain', 'submitting', 'result_available'}:
+                    start_collection(folder, submit_id)
+            except (ValueError, OSError):
+                continue
+        elif (folder / 'status.json').exists():
+            try:
+                data = json.loads((folder / 'status.json').read_text())
+            except (ValueError, OSError):
+                continue
+            if data.get('state') == 'running':
+                update(folder, state='error', status='Preparation was interrupted. Inspect existing artifacts before explicitly preparing again.')
+
 
 @app.get('/health')
 def health():
-    return {'status':'ok','service':'TEIN Video Workflow'}
+    return {'status': 'ok', 'service': 'Genjustsu Cloud Workflow', 'generation_readiness': 'Use doctor.py; UI health does not establish provider readiness.'}
+
+app.mount('/runs', StaticFiles(directory=RUNS), name='runs')
+app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')

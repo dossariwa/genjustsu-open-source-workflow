@@ -1,20 +1,10 @@
-# Models and runtime
+# Providers and models
 
-All neural inference in the default path is hosted. No weight downloads are included.
+- Depth: `depth-anything/Video-Depth-Anything`, `/infer_video_depth`, `grayscale=False`. The second output is the colored depth. Normalize locally to 24 fps and max side 960; require matching frame count/geometry and preserve returned colors.
+- Segmentation: cloud SAM 3 returning raw PNG masks. The configured private `wosx/genjustsu-sam3-raw` endpoint `/segment_raw` accepts at most 8 seconds (192 normalized frames). It rejects longer clips rather than truncating. The public `merve/SAM3-video-segmentation` demo returns overlays and cannot replace this endpoint. See the [raw-mask contract](HF-RAW-MASKS.md). No local SAM model download.
+- Audio: ElevenLabs audio isolation, `scribe_v1` transcription and optional `eleven_multilingual_sts_v2` conversion. Isolation is imperfect; residual background subtraction is an estimate.
+- Vision: configurable `OPENAI_VISION_MODEL` (default `gpt-4o`). Scene prompting and 3–4-frame advice remain editable/advisory. Video identity is not converted to images.
+- Generation: OpenArt `byte-plus-seedance-2-5-draft`, with a 480p draft and video/image references. The installed CLI schema and authenticated account are checked before submission. The current adapter leaves the provider's later HD completion action disabled until its credit-approved lineage flow is implemented; a replacement generation is never substituted. See [OPENART.md](OPENART.md).
+- Mesh: existing isolated MediaPipe Face Landmarker CPU worker, optimized for one centered speaker. Its small model downloads on first use; inspect all frames.
 
-| Stage | Provider/model | Configuration |
-|---|---|---|
-| Vocal separation | Replicate `cjwbw/demucs` | `htdemucs`, WAV; version `25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953` |
-| Depth, default | [lucataco/depth-anything-video](https://replicate.com/lucataco/depth-anything-video) | latest version/schema resolved at run time; exact returned colors |
-| Depth alternative | [chenxwh/depth-any-video](https://replicate.com/chenxwh/depth-any-video) | explicitly selected alternative model |
-| Depth alternative | [Video-Depth-Anything Space](https://huggingface.co/spaces/depth-anything/Video-Depth-Anything) | public GPU quota/availability; optional HF_TOKEN |
-| Segmentation | [lucataco/sam3-video](https://replicate.com/lucataco/sam3-video) | pinned version `408f82fc20c300aac5d61d2e34ddb34cd0181e810e9f609d250aed14d5f81269`; `video`, `prompt`, `mask_only=true`, `return_zip=true` |
-| Generation | Enhancor Seedance 2.5 | Edit or multi_reference; draft then approved 1080p |
-| Pitch | Rubber Band CLI | +3 semitones, time ratio 1 |
-| Video/audio IO | PyAV / FFmpeg libraries | normalization, compositing, AAC input vocals, original audio packet remux |
-
-The pinned SAM and Demucs versions and the depth model schema were verified through authenticated Replicate API reads on 2026-10-06. If a model becomes unavailable, inspect its current schema before changing the adapter. [Replicate HTTP API](https://replicate.com/docs/reference/http).
-
-The [SAM3-Video Hugging Face Space](https://huggingface.co/spaces/linoyts/SAM3-Video) was an earlier exploration; it is not the active raw-mask implementation. Never describe a green visualization overlay as a raw mask. Public Spaces may change their Gradio API. An RGB segmentation retry is a deliberate repair, not a different depth color treatment.
-
-`requirements.txt` records versions from the development environment. Setup installs them into a clean venv; the package's local tests are also runnable using a compatible existing environment. Hosted availability, price and access are account-dependent; no free-inference claim is made. Local self-hosting of model weights is not configured here.
+Primary references: [OpenArt Seedance 2.5 Draft](https://i18n.openart.ai/ai-model/seedance-2-5-draft/), [HF depth Space source](https://huggingface.co/spaces/depth-anything/Video-Depth-Anything/tree/main), [HF SAM Space source](https://huggingface.co/spaces/merve/SAM3-video-segmentation/tree/main), [ElevenLabs API](https://elevenlabs.io/docs/api-reference/introduction), [OpenAI vision](https://developers.openai.com/api/docs/guides/images-vision). Provider availability, quotas and schemas can change; validate before submitting.

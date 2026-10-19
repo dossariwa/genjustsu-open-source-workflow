@@ -1,24 +1,27 @@
-# Package validation
+# Validation — OpenArt migration, 2026-10-18
 
-Validated on 2026-10-06 in a newly created virtual environment installed from requirements.txt (Python 3.14.6, macOS ARM64):
+Branch: `dev`. Local, uncommitted work in `/opt/Genjustsu-Open-Source-Workflow`. Python 3.12.15 on macOS ARM64. The existing HF, ElevenLabs and OpenAI configuration and private SAM3 Space are preserved. `.env` remains ignored and mode 0600; it now selects the official OpenArt CLI, Seedance 2.5 Draft and 480p. OAuth credentials remain in the CLI's private credential file, outside this repository.
 
-- Eight isolated tests passed: mask fingerprint invalidation, duplicate-submission protection, self-contained Edit draft payload, result download/restoration dispatch, approved-draft HD payload, rejection of missing mask frames, and byte-identical original audio packet restoration, and dynamic Tmpfiles link extraction.
-- Synthetic four-frame compositing test passed (depth foreground, original background, aligned output).
-- FastAPI TestClient returned 200 for the UI, all three companion assets and API docs.
-- Clean setup.sh installation, dependency imports, Rubber Band, missing-key failure, and configured-key checks passed. The share package remains credential-free.
-- Source scanned for machine-specific user paths, old generation IDs, known credentials, and legacy parent-project references.
+## Current results
 
-A live user-authorized end-to-end test completed successfully: Demucs, colored depth, SAM 3, rejected bad depth mask, RGB repair and all-frame visual review, Tmpfiles upload, Omni draft, polling/retrieval, audio restoration, approved HD completion, and browser download. The HD export is 1920×1080; all 189 original audio packets match byte-for-byte. A 0.292-second final-frame hold preserved the full source audio. The actual browser download matched the HD output SHA-256. A fresh dependency installation on other operating systems has not been tested. Clean-install testing caught and fixed an invalid Tmpfiles direct-link assumption and Enhancor’s required callback. The automatic cloudflared callback receiver returned HTTP 200; a file-route request returned 404. Catbox is a newly added adapter verified against its documented API, not a live upload. The unit suite mocks external calls; full-clip visual mask approval remains separate.
+- `.venv/bin/python -m unittest discover -s tests`: **163 tests passed**. All inference, media uploads and generation are mocked. Coverage includes preparation/audio/raw masks, review hashes, legacy recovery, OpenArt exact model/schema and quote validation, account/project binding, immutable prompts/references, durable uncertain-submission recovery, provider routing, safe transport errors and credential-free subprocess environments.
+- `.venv/bin/python test_composite.py`: **passed**. Synthetic frames preserve exact decoded colored-depth foreground pixels and original RGB background.
+- `.venv/bin/python doctor.py --mesh --require-keys`: **exit 0**. Local dependencies, Rubber Band, the isolated face worker and required key presence pass. OpenArt CLI 0.1.1 is authenticated; the live account reports **Starter, 4,000 credits**. The live catalog and schema verify `byte-plus-seedance-2-5-draft`, `element2video`, **480p**. The configured private raw-mask endpoint is retained.
+- Independent read-only OpenArt project discovery verifies a writable default project. The official MCP service accepts the local CLI's OAuth credential. The CLI owns refresh; no token is copied into `.env` or persisted job state.
+- Python syntax: **33 files passed**. UI JavaScript syntax and `git diff --check` pass.
+- Local UI inspection verifies OpenArt / Seedance 2.5 Draft / 480p labels, the three preparation modes, explicit credit-quote gating and disabled HD upgrade. The UI runs only on loopback at `http://127.0.0.1:8770`.
+- **No media uploads, inference, generation, HD purchases or credit spending occurred during this migration. OpenArt remained at 4,000 credits.**
 
+## Provider behavior and remaining limits
 
-## Mesh client verification — October 6, 2026
+The installed OpenArt CLI's video command supports text-to-video and image-to-video only. The workflow therefore uses OpenArt's official Streamable HTTP MCP endpoint for video references, exact quotes, generation and result collection. Live model schema permits a 4–30 second integer duration, one or more visual references, image/video reference types and 480p output. The reviewed source with embedded guidance is first; appearance references follow. The exact creative prompt and actual mode are saved.
 
-- Fresh ZIP extraction and `setup-face-mesh.sh` succeeded on macOS ARM64 / Python 3.12.
-- Both fast face mesh and depth + face mesh were run through the packaged preparation functions, using actual local tracking, encoding and Rubber Band pitch processing. Each tracked all 104 frames and embedded audio successfully.
-- Previously generated Demucs stems and depth/SAM outputs were injected as fixtures for this client test; it did not repeat billed provider calls.
-- Ten automated tests cover review invalidation, submission payloads, collection and other integration behavior.
-- Fixed combined-mode RGB mask repair to reapply the mesh. Fast mode rejects SAM repair. Added `doctor.py --mesh` and depth/original dimension and frame-count checks.
-- The UI exposes all three preparation choices. First-use model download was exercised.
-- Mesh modes remain optimized for a single centered speaker. Other framing, multiple faces, other operating systems and every provider failure condition are not exhaustively validated. No claim of bug-free operation is made.
+New jobs use OpenArt. Saved Dreamina jobs retain their original identities and may only collect existing results; they cannot be silently resubmitted through OpenArt. A durable attempted marker precedes every generation call. Missing or uncertain history IDs never trigger an automatic retry. The provider does not expose a client idempotency key or server-enforced maximum charge. A fresh exact quote is checked against explicit approval immediately before submission; pricing could still change between those calls.
 
-Hosting fallback checks: 13 automated tests now pass, including primary-host retry, fallback switching, disabled fallback, and success without fallback. Catbox behavior is mocked in these tests, not newly live-uploaded.
+Live uploads, generation admission, media quality and downloading remain **untested** because they require an authorized media job. Tests and account/schema checks are not end-to-end delivery proof. Full-clip visual review and explicit approval of each generation's quote remain required. The local HD action is disabled, although OpenArt advertises a paid upgrade action on eligible completed drafts; implementing it requires a separately approved quote and preserved draft lineage.
+
+## Preserved preparation setup
+
+Earlier read-only setup verified HF account authentication, OpenAI configured-model metadata, ElevenLabs account/George voice access, and the private SAM3 `/segment_raw` schema. These were not inference checks and were not all repeated during the provider migration. `ELEVENLABS_VOICE_ID=JBFqnCBsd6RMkjVDRZzb` remains selected. The private `wosx/genjustsu-sam3-raw` Space was RUNNING on free ZeroGPU at commit `28a44ff891b02b61c885b764ea1c331d842f4f9e` in that verification. Its current configured endpoint is unchanged.
+
+That raw-mask endpoint accepts at most **8 seconds (192 frames at 24 fps)** and rejects longer inputs without truncation. Advanced depth modes share this limit. Fast face mesh skips depth/SAM; its small Google model downloads on first use. Mesh tracking and real mask quality still require full-clip review. Final exports preserve the entire untouched original source audio by default; generated audio is discarded.

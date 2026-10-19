@@ -1,0 +1,17 @@
+# Cloud Space only. Do not install this file in the local workflow environment.
+# Exact direct versions from upstream uv.lock; Transformers retains the distinct
+# full commit in upstream requirements.txt, which is the Gradio build input.
+# The current ZeroGPU build also explicitly requires spaces==0.51.3; match it.
+accelerate==1.11.0
+av==16.0.1
+gradio==5.49.1
+huggingface-hub==1.1.5
+imageio[pyav]==2.37.2
+kernels==0.11.0
+numpy==2.2.6
+opencv-python==4.12.0.88
+pillow==11.3.0
+spaces==0.51.3
+torch==2.8.0
+torchvision==0.23.0
+transformers @ git+https://github.com/huggingface/transformers.git@c3fb1b1a6ca1102f62b139c83a088a97e5a55477

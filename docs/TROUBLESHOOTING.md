@@ -1,15 +1,17 @@
 # Troubleshooting
 
-- Webhook URL required: install cloudflared and use start.command, or set your own public HTTPS callback. Never tunnel the UI/runs directory. The callback-only receiver is separate.
+Run `.venv/bin/python doctor.py --require-keys` first. It prints presence and readiness, never credential values, and makes no paid inference calls.
 
-- Missing Rubber Band: install its CLI, restart the shell and run `doctor.py`.
-- Missing credentials: populate this folder's `.env`; restart. Credentials are never obtained from a parent project.
-- 401/403 or missing model: verify your account/key/access and provider model schema. Never paste secrets into logs.
-- Invalid image / media download failure: use real PNG/JPEG/WebP files and reachable direct URLs. Tmpfiles URLs expire. The uploader rejects HTML/empty responses.
-- Mask holes, edge noise, chair spill: reject it, run RGB repair and review the full clip again. Cleanup is heuristic; never assume it proves correctness.
-- Frame count/index mismatch: composition fails deliberately. Inspect output fps/frame IDs; align the provider output to the same source rather than forcing a shifted mask through.
-- Original audio duration mismatch: the exporter permits a short final-frame hold for a 0.25–0.5 second provider rounding gap and records `duration-adjustment.json`. Larger differences are rejected. It never stretches or loops source audio. If the source codec cannot be remuxed into MP4, stop and choose an explicit compatible export plan.
-- No source audio: currently unsupported; provide a source with an audio track or adapt the workflow explicitly.
-- Restart: Seedance and HD result retrieval resume from saved responses. Earlier preparation failures require inspecting saved Replicate predictions. The local UI is not a durable distributed worker queue.
-- UI fonts: Google Fonts is used, with system fallbacks if offline. Companion artwork is bundled under `static/companions`.
-- Lost pending status: use `workflow.py resume JOB` (or `--hd`), not another submit. Completed outputs remain in `runs`.
+- **UI ready but generation blocked:** add this project's three keys privately, authenticate the local OpenArt CLI and resolve `byte-plus-seedance-2-5-draft` from its live model catalog. OpenArt connector login and CLI login are separate.
+- **Upgraded account but CLI signed out:** complete the official CLI OAuth login with the upgraded account. Do not paste a browser token into `.env`; OpenArt does not require an API key here.
+- **SAM raw masks unsupported:** the public demo returns overlays; configure a raw-PNG Space endpoint per `HF-RAW-MASKS.md`. Do not extract masks from overlay colors. The private SAM3 endpoint accepts at most 8 seconds and rejects longer clips.
+- **Mask/mesh review pending:** review the full clip and guidance audio; artifact changes invalidate old approval. Sampled AI advice cannot approve it.
+- **OpenArt awaiting credits:** inspect the saved quote, explicitly approve a ceiling, then continue the same saved request. A subscription or positive balance is not permission to spend during setup.
+- **Interrupted or unknown generation:** collect the saved provider request ID. Never delete state to force a retry or start replacement work while the outcome is uncertain.
+- **Video download rejected:** preserve the completed provider request; use the provider's result download and import the video in the UI for audio restoration if necessary. Never claim delivery without a downloaded and restored file.
+- **1080p unavailable:** use only a verified completion/upscale contract tied to the draft and explicit HD approval. A new generation is not an upgrade. Existing Dreamina drafts retain the installed Canvas CLI's lack of video HD completion.
+- **Missing Rubber Band:** install the CLI through your package manager. It preserves pitch-shift timing and corrects excessive STS duration drift.
+- **Mesh worker missing:** run `bash setup-face-mesh.sh` with Python 3.12; verify `doctor.py --mesh`. The small model downloads on first use.
+- **Audio differs:** `original` packet-copies the full source soundtrack. `elevenlabs_sts` deliberately creates a new mix; it cannot be byte-identical. Large video/audio duration mismatches are rejected instead of truncating source audio.
+
+No callbacks, cloudflared, Replicate or Enhancor keys are required. Dreamina is needed only to collect older Dreamina jobs. Never paste keys or raw provider payloads into support messages.

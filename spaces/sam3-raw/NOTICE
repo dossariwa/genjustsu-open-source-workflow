@@ -1,0 +1,15 @@
+SAM3 Raw Masks extension
+
+Upstream application: merve/SAM3-video-segmentation on Hugging Face
+Source: https://huggingface.co/spaces/merve/SAM3-video-segmentation
+Pinned source commit: d85543326acde4c53740a17859005dcf9d1f5231
+Upstream declares Apache License 2.0 in its Space README metadata.
+Original author attribution and source code are retained by the patcher.
+
+Modifications: this workflow adds a strict eight-second rejection and an API
+exporting aligned binary PNG masks from actual SAM3 results. It does not export
+overlay images as masks or alter source video colors.
+
+The SAM3 model and weights have their own terms and gated access requirements:
+https://huggingface.co/facebook/sam3
+The application license does not grant model access or replace those terms.

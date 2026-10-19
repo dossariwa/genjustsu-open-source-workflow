@@ -1,0 +1,10 @@
+{
+  "repo_id": "merve/SAM3-video-segmentation",
+  "revision": "d85543326acde4c53740a17859005dcf9d1f5231",
+  "app_sha256": "52eb1e719cc1c712f1dfe6b2bc0c47c8e6b49e2a9f510d1ea65dfa8174992ef0",
+  "license": "Apache-2.0 (upstream Space README declaration)",
+  "source_url": "https://huggingface.co/spaces/merve/SAM3-video-segmentation/blob/d85543326acde4c53740a17859005dcf9d1f5231/app.py",
+  "dependency_lock_sha256": "42ac0d9e0697aec6166b569718b64adc4ea1186e91c61c23a2c5580882227b33",
+  "upstream_requirements_sha256": "ff38b138fa4ef15de081d6df3c56ffe58ec90c508875fbe62bff6cde0a81fd0a",
+  "transformers_revision": "c3fb1b1a6ca1102f62b139c83a088a97e5a55477"
+}

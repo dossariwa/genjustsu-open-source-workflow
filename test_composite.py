@@ -1,20 +1,30 @@
+"""Offline integration smoke test: raw masks preserve exact decoded depth colors."""
 import tempfile
 from pathlib import Path
 import numpy as np
-from pipeline import writer,put,finish,composite,frames
+from PIL import Image
+from pipeline import writer, put, finish, composite, frames
+
 with tempfile.TemporaryDirectory() as tmp:
- p=Path(tmp)
- arrays={
- 'original':np.full((64,64,3),(180,40,40),dtype=np.uint8),
- 'depth':np.full((64,64,3),100,dtype=np.uint8),
- 'seg':np.full((64,64,3),100,dtype=np.uint8)}
- arrays['seg'][16:48,16:48]=[50,177,50]
- for name,a in arrays.items():
-  c,s=writer(p/(name+'.mp4'),64,64)
-  for i in range(4):put(c,s,a,i)
-  finish(c,s)
- assert composite(p/'original.mp4',p/'depth.mp4',p/'seg.mp4',p)==4
- a=next(frames(p/'composite.mp4'))
- assert np.max(np.abs(a[32,32].astype(int)-100))<10
- assert a[2,2,0]>160 and a[2,2,1]<60
- print('PASS: mask selects depth subject, background preserved, four aligned frames exported.')
+    p = Path(tmp)
+    (p / 'masks').mkdir()
+    arrays = {
+        'original': np.full((64, 64, 3), (180, 40, 40), dtype=np.uint8),
+        'depth': np.full((64, 64, 3), (33, 149, 221), dtype=np.uint8),
+    }
+    for name, array in arrays.items():
+        c, s = writer(p / (name + '.mp4'), 64, 64, lossless=True)
+        for index in range(4):
+            put(c, s, array, index)
+        finish(c, s)
+    mask = np.zeros((64, 64), dtype=np.uint8)
+    mask[16:48, 16:48] = 255
+    for index in range(4):
+        Image.fromarray(mask).save(p / 'masks' / f'mask_{index:06d}.png')
+    assert composite(p / 'original.mp4', p / 'depth.mp4', p / 'masks', p) == 4
+    decoded = list(frames(p / 'composite.mp4'))
+    assert len(decoded) == 4
+    expected = np.where((mask > 0)[:, :, None], arrays['depth'], arrays['original'])
+    for array in decoded:
+        np.testing.assert_array_equal(array, expected)
+    print('PASS: raw masks select exact colored depth pixels, RGB background preserved, four aligned frames exported.')
