@@ -57,6 +57,50 @@ class AppIntegrationTests(unittest.TestCase):
         network.assert_not_called()
         submit.assert_not_called()
 
+    def test_telemetry_reads_only_account_and_omits_private_fields(self):
+        account = {'user': {'uid': 'private-id', 'email': 'private@example.test'},
+                   'plan': 'Starter', 'credits': 4000, 'accessToken': 'private-token',
+                   'download_url': 'https://example.test/private?signature=secret'}
+        with patch('openart_transport.OpenArtTransport') as transport:
+            transport.return_value.call.return_value = account
+            result = self.client.get('/telemetry')
+        self.assertEqual(result.status_code, 200)
+        transport.return_value.call.assert_called_once_with('openart_account_get', {})
+        summary = result.json()['openart']
+        self.assertTrue(summary['authenticated'])
+        self.assertEqual(summary['plan'], 'Starter')
+        self.assertEqual(summary['credits'], 4000)
+        self.assertTrue(summary['checked_at'])
+        self.assertIn('remain unverified', summary['detail'])
+        self.assertNotIn('private', result.text)
+        self.assertNotIn('secret', result.text)
+
+    def test_telemetry_failure_never_returns_provider_error(self):
+        with patch('openart_transport.OpenArtTransport') as transport:
+            transport.return_value.call.side_effect = RuntimeError('token=secret https://example.test/private')
+            result = self.client.get('/telemetry')
+        self.assertEqual(result.status_code, 200)
+        summary = result.json()['openart']
+        self.assertFalse(summary['authenticated'])
+        self.assertIsNone(summary['plan'])
+        self.assertIsNone(summary['credits'])
+        self.assertIsNone(summary['checked_at'])
+        self.assertNotIn('secret', result.text)
+        self.assertNotIn('https://', result.text)
+
+    def test_telemetry_requires_account_identity_and_finite_credit_balance(self):
+        with patch('openart_transport.OpenArtTransport') as transport:
+            for account in [None, {}, {'user': 'invalid'}, {'user': {'uid': ''}}]:
+                with self.subTest(account=account):
+                    transport.return_value.call.return_value = account
+                    self.assertFalse(self.client.get('/telemetry').json()['openart']['authenticated'])
+            for credits in [True, -1, float('nan'), float('inf'), '4000']:
+                with self.subTest(credits=credits):
+                    transport.return_value.call.return_value = {'user': {'uid': 'valid'}, 'credits': credits}
+                    summary = self.client.get('/telemetry').json()['openart']
+                    self.assertTrue(summary['authenticated'])
+                    self.assertIsNone(summary['credits'])
+
     def test_invalid_job_and_modes_are_rejected_before_work(self):
         self.assertEqual(self.client.get('/jobs/not-a-job').status_code, 404)
         self.assertEqual(self.client.get('/jobs/' + 'f' * 32).status_code, 404)

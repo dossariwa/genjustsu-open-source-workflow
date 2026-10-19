@@ -1,6 +1,9 @@
 """Local workflow UI; remote calls occur only in explicitly requested jobs."""
 from pathlib import Path
+from datetime import datetime, timezone
 import json
+import math
+import re
 import shutil
 import threading
 import uuid
@@ -11,7 +14,7 @@ from config import ROOT, setting
 
 RUNS = ROOT / 'runs'
 RUNS.mkdir(exist_ok=True)
-app = FastAPI()
+app = FastAPI(title='GENJUSTSU // 幻術 · 変わり身の術', description='Kawarimi Substitution Studio')
 jobs, hd_jobs = {}, {}
 mutation_lock = threading.Lock()
 collecting = set()
@@ -62,8 +65,43 @@ def capabilities():
     except ProviderError:
         generation = {'provider': 'openart', 'mode': 'element2video', 'video_hd_supported': False,
                       'available': False, 'detail': 'OpenArt connection unavailable; run doctor.py.'}
+    generation = {**generation,
+                  'model': setting('OPENART_DRAFT_MODEL', 'byte-plus-seedance-2-5-draft'),
+                  'resolution': setting('OPENART_DRAFT_RESOLUTION', '480p')}
     return {'generation': generation, 'segmentation': configuration_status(),
+            'audio': {'provider': 'elevenlabs',
+                      'configured': bool(setting('ELEVENLABS_API_KEY')),
+                      'voice_id': setting('ELEVENLABS_VOICE_ID'),
+                      'guidance_mode': setting('AUDIO_DISGUISE_MODE', 'pitch_shift')},
             'final_audio_source': setting('FINAL_AUDIO_SOURCE', 'original')}
+
+
+@app.get('/telemetry')
+def telemetry():
+    """Read-only account summary; never expose identity or raw provider data."""
+    from openart_transport import OpenArtTransport
+    summary = {'authenticated': False, 'plan': None, 'credits': None, 'checked_at': None,
+               'detail': 'OpenArt account could not be checked. Run the read-only doctor or sign in with the official CLI.'}
+    try:
+        account = OpenArtTransport().call('openart_account_get', {})
+        user = account.get('user') if isinstance(account, dict) else None
+        if not isinstance(user, dict) or not isinstance(user.get('uid'), str) or not user['uid']:
+            raise ValueError('Account identity unavailable')
+        plan = account.get('plan')
+        credits = account.get('credits')
+        summary.update(
+            authenticated=True,
+            plan=plan if isinstance(plan, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9 +._-]{0,63}', plan) else None,
+            credits=credits if isinstance(credits, (int, float)) and not isinstance(credits, bool)
+            and math.isfinite(credits) and credits >= 0 else None,
+            checked_at=datetime.now(timezone.utc).isoformat(),
+            detail='Account checked through OpenArt MCP. Model readiness and live generation remain unverified.',
+        )
+    except Exception:
+        # Provider errors can contain credentials or signed URLs. Keep only the
+        # fixed summary and leave all request/submission paths untouched.
+        pass
+    return {'openart': summary}
 
 
 @app.post('/jobs')

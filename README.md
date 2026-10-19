@@ -1,6 +1,18 @@
-# Genjustsu — Open Source Workflow
+# GENJUSTSU // 幻術 · 変わり身の術
+
+**Kawarimi Substitution Studio** — an independent, open-source cloud video workflow.
 
 A local FastAPI UI for cloud-assisted video subject replacement. Prepare a clip, review its entire mask or face tracking, review the exact creative prompt, then explicitly submit an OpenArt Seedance 2.5 Draft. Original source files and the complete original soundtrack are preserved.
+
+The dark Shinobi interface uses obsidian surfaces, crimson controls, cyan telemetry and JetBrains Mono readouts. The four stages are preparation, full-clip review, Kawarimi target references with credit approval, and draft comparison with restored audio. Its “Replace anything” concept supports person, creature and object prompts within the configured providers' capabilities. Background preservation is a generation instruction, not a guarantee of byte-identical generated pixels; original audio preservation refers to the source's compressed audio packets.
+
+## Interface and hero reference
+
+The page structure lives in `static/index.html`, styling in `static/styles.css`, and browser behavior in `static/app.js`. Existing endpoint contracts, form names and saved-job reference identifiers remain compatible so earlier jobs can still be reviewed and collected.
+
+Use `static/assets/genjutsu_hero.webp` as the default hero reference, or select an image or GIF with the hero's local banner control. The banner is visual inspiration only and is separate from the job's submitted identity references. Download a Pinterest visual you have permission to use and choose that local file; a Pinterest page link is not an image upload. Hero selection does not submit media or start paid generation.
+
+Telemetry distinguishes local configuration from authenticated provider checks and completed generation. `/capabilities` reports configured model, mask Space and voice settings without provider calls; `/telemetry` reads only the OpenArt account and returns its plan, credit balance and check time without private account fields. A requested account profile is not a live credit balance when that check is unavailable. Voice configuration does not enable speech-to-speech conversion by itself: pitch-shifted guidance remains the default until conversion is explicitly configured.
 
 ## Stack
 
@@ -41,9 +53,9 @@ Required configuration: `HF_ACCESS_TOKEN` (or `HF_TOKEN`), `ELEVENLABS_API_KEY`,
 
 ## Preparation and audio
 
-- **Advanced · Depth + SAM**: colored cloud depth composited through raw cloud masks over the original RGB background. RGB segmentation fallback is recorded if depth masks fail objective alignment/coverage checks; human review still checks every frame.
-- **Fast · Face mesh**: skips depth and SAM, overlays facial guidance on the original frames. One centered speaker is the supported experimental use case.
-- **Advanced + Face mesh**: retains the depth composite and adds facial tracking from the original frames. Review both components.
+- **Depth + SAM**: colored cloud depth composited through raw cloud masks over the original RGB background. RGB segmentation fallback is recorded if depth masks fail objective alignment/coverage checks; human review still checks every frame.
+- **Fast · Face Mesh**: skips depth and SAM, overlays facial guidance on the original frames. One centered speaker is the supported experimental use case.
+- **Combined Depth + Mesh**: retains the depth composite and adds facial tracking from the original frames. Review both components.
 
 For mesh modes, run `bash setup-face-mesh.sh` with Python 3.12, then `doctor.py --mesh`. The model downloads on first use. The main application stays in its separate `.venv`.
 
@@ -72,6 +84,7 @@ OpenArt state is written before remote side effects. Restart and resume collect 
 ```bash
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/python test_composite.py
+node --check static/app.js
 .venv/bin/python doctor.py
 .venv/bin/python doctor.py --require-keys
 ```
