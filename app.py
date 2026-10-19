@@ -10,7 +10,7 @@ import uuid
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from config import ROOT, setting
+from config import ROOT, setting, DEPTH_MAX_SECONDS, DEPTH_MAX_FRAMES, DEPTH_FPS
 
 RUNS = ROOT / 'runs'
 RUNS.mkdir(exist_ok=True)
@@ -68,12 +68,18 @@ def capabilities():
     generation = {**generation,
                   'model': setting('OPENART_DRAFT_MODEL', 'byte-plus-seedance-2-5-draft'),
                   'resolution': setting('OPENART_DRAFT_RESOLUTION', '480p')}
+    depth_limit = {'max_seconds': DEPTH_MAX_SECONDS, 'max_frames': DEPTH_MAX_FRAMES, 'fps': DEPTH_FPS}
     return {'generation': generation, 'segmentation': configuration_status(),
             'audio': {'provider': 'elevenlabs',
                       'configured': bool(setting('ELEVENLABS_API_KEY')),
                       'voice_id': setting('ELEVENLABS_VOICE_ID'),
                       'guidance_mode': setting('AUDIO_DISGUISE_MODE', 'pitch_shift')},
-            'final_audio_source': setting('FINAL_AUDIO_SOURCE', 'original')}
+            'final_audio_source': setting('FINAL_AUDIO_SOURCE', 'original'),
+            'clip_limits': {
+                'depth': depth_limit,
+                'depth_mesh': depth_limit,
+                'face_mesh': {'max_seconds': 30},
+            }}
 
 
 @app.get('/telemetry')
@@ -122,6 +128,22 @@ def create(video: UploadFile = File(...), prompt: str = Form('person'),
     src = folder / 'upload.mp4'
     with src.open('wb') as out:
         shutil.copyfileobj(video.file, out)
+    if mode in ('depth', 'depth_mesh'):
+        from pipeline import probe_source_duration, normalized_frame_count
+        try:
+            duration = probe_source_duration(src)
+            frames = normalized_frame_count(duration)
+        except ValueError as exc:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise HTTPException(400, str(exc)) from None
+        if duration > DEPTH_MAX_SECONDS or frames > DEPTH_MAX_FRAMES:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise HTTPException(
+                400,
+                f'Depth modes accept at most {DEPTH_MAX_SECONDS:.1f} seconds '
+                f'({DEPTH_MAX_FRAMES} frames at {DEPTH_FPS}fps). '
+                'Choose a shorter clip or Fast · Face Mesh.',
+            )
     update(folder, state='running', status='Starting preparation')
 
     def work():

@@ -1,4 +1,5 @@
 """HTTP and recovery integration tests. Provider calls are always mocked."""
+from fractions import Fraction
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -6,10 +7,13 @@ import json
 import tempfile
 import unittest
 
+import av
+import numpy as np
 from fastapi.testclient import TestClient
 from starlette.datastructures import UploadFile
 
 import app as ui
+import config
 import mask_review
 import seedance_bridge
 import workflow
@@ -332,6 +336,126 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(result.json()['minimum_credit_ceiling'], 30)
         prepare.assert_called_once_with(self.folder)
         collect.assert_not_called()
+
+
+
+def synthetic_clip(path, fps, seconds, size=64):
+    """Write a tiny H.264 clip with an exact stream duration for limit tests."""
+    frames = int(round(seconds * fps))
+    with av.open(str(path), 'w') as out:
+        stream = out.add_stream('libx264', rate=fps)
+        stream.width = stream.height = size
+        stream.pix_fmt = 'yuv420p'
+        for index in range(frames):
+            frame = av.VideoFrame.from_ndarray(
+                np.full((size, size, 3), 40, dtype=np.uint8), format='rgb24')
+            frame.pts = index
+            frame.time_base = Fraction(1, fps)
+            for packet in stream.encode(frame):
+                out.mux(packet)
+        for packet in stream.encode():
+            out.mux(packet)
+
+
+class DepthDurationLimitTests(unittest.TestCase):
+    """Server-side depth clip limit; pipelines stay mocked (no network/paid calls)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.runs = Path(self.temp.name)
+        for name, value in [('RUNS', self.runs), ('jobs', {}), ('hd_jobs', {}), ('collecting', set())]:
+            mocked = patch.object(ui, name, value)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+        self.client = TestClient(ui.app)
+        self.addCleanup(self.client.close)
+        self.clip_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.clip_dir.cleanup)
+        self.clips = Path(self.clip_dir.name)
+
+    def clip_bytes(self, fps, seconds):
+        path = self.clips / f'{fps}fps-{seconds}s.mp4'
+        if not path.exists():
+            synthetic_clip(path, fps, seconds)
+        return path.read_bytes()
+
+    def post_job(self, mode, fps, seconds, pipeline_target):
+        readiness = {'ready': True, 'detail': 'configured', 'space': 'test', 'api_name': '/segment_raw'}
+        with patch('raw_masks.configuration_status', return_value=readiness), \
+                patch(pipeline_target) as prepare, \
+                patch.object(ui.threading, 'Thread', InlineThread):
+            result = self.client.post(
+                '/jobs', data={'mode': mode},
+                files={'video': ('source.mp4', self.clip_bytes(fps, seconds), 'video/mp4')})
+        return result, prepare
+
+    def test_depth_clip_at_most_eight_seconds_is_accepted(self):
+        result, prepare = self.post_job('depth', 24, 7.5, 'pipeline.run')
+        self.assertEqual(result.status_code, 200)
+        prepare.assert_called_once()
+        self.assertEqual(result.json()['state'], 'done')
+
+    def test_depth_clip_over_eight_seconds_is_rejected_with_400(self):
+        result, prepare = self.post_job('depth', 24, 9.0, 'pipeline.run')
+        self.assertEqual(result.status_code, 400)
+        self.assertIn('8.0 seconds', result.json()['detail'])
+        self.assertIn('192 frames', result.json()['detail'])
+        prepare.assert_not_called()
+        self.assertEqual(list(self.runs.iterdir()), [])
+
+    def test_depth_mesh_over_eight_seconds_is_rejected(self):
+        result, prepare = self.post_job('depth_mesh', 24, 9.0, 'face_mesh.run_depth')
+        self.assertEqual(result.status_code, 400)
+        self.assertIn('8.0 seconds', result.json()['detail'])
+        prepare.assert_not_called()
+        self.assertEqual(list(self.runs.iterdir()), [])
+
+    def test_face_mesh_over_eight_seconds_remains_accepted(self):
+        with patch('face_mesh.run') as prepare, patch.object(ui.threading, 'Thread', InlineThread):
+            result = self.client.post(
+                '/jobs', data={'mode': 'face_mesh'},
+                files={'video': ('source.mp4', self.clip_bytes(24, 9.0), 'video/mp4')})
+        self.assertEqual(result.status_code, 200)
+        prepare.assert_called_once()
+
+    def test_exactly_eight_seconds_at_24fps_is_accepted(self):
+        result, prepare = self.post_job('depth', 24, 8.0, 'pipeline.run')
+        self.assertEqual(result.status_code, 200)
+        prepare.assert_called_once()
+
+    def test_eight_second_clip_at_30fps_is_accepted(self):
+        # Source duration is 8s; after 24fps resample normalize yields 192 frames.
+        result, prepare = self.post_job('depth', 30, 8.0, 'pipeline.run')
+        self.assertEqual(result.status_code, 200)
+        prepare.assert_called_once()
+        from pipeline import probe_source_duration, normalized_frame_count
+        path = self.clips / '30fps-8.0s.mp4'
+        duration = probe_source_duration(path)
+        self.assertEqual(duration, 8.0)
+        self.assertEqual(normalized_frame_count(duration), config.DEPTH_MAX_FRAMES)
+
+    def test_capabilities_exposes_depth_clip_limits(self):
+        generation = {'provider': 'openart', 'mode': 'element2video', 'video_hd_supported': False,
+                      'available': False, 'detail': 'mocked'}
+        segmentation = {'ready': False, 'detail': 'mocked', 'space': None, 'api_name': None}
+        with patch('seedance_bridge.capabilities', return_value=generation), \
+                patch('raw_masks.configuration_status', return_value=segmentation):
+            result = self.client.get('/capabilities')
+        self.assertEqual(result.status_code, 200)
+        body = result.json()
+        self.assertEqual(body['generation']['provider'], 'openart')
+        limits = body['clip_limits']
+        self.assertEqual(limits['depth'], {
+            'max_seconds': config.DEPTH_MAX_SECONDS,
+            'max_frames': config.DEPTH_MAX_FRAMES,
+            'fps': config.DEPTH_FPS,
+        })
+        self.assertEqual(limits['depth_mesh'], limits['depth'])
+        self.assertEqual(limits['face_mesh']['max_seconds'], 30)
+        self.assertEqual(config.DEPTH_MAX_FRAMES, config.DEPTH_MAX_SECONDS * config.DEPTH_FPS)
+        self.assertEqual(config.DEPTH_MAX_FRAMES, 192)
+
 
 
 if __name__ == '__main__':
