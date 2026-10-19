@@ -14,6 +14,9 @@ from config import ROOT, setting, DEPTH_MAX_SECONDS, DEPTH_MAX_FRAMES, DEPTH_FPS
 
 RUNS = ROOT / 'runs'
 RUNS.mkdir(exist_ok=True)
+# Static export of the Next.js studio (web/). Optional: without a build, or
+# with UI=legacy, the original static/index.html UI is served unchanged.
+WEB_OUT = ROOT / 'web' / 'out'
 app = FastAPI(title='GENJUSTSU // 幻術 · 変わり身の術', description='Kawarimi Substitution Studio')
 jobs, hd_jobs = {}, {}
 mutation_lock = threading.Lock()
@@ -51,8 +54,17 @@ def failure(exc):
     return f'{type(exc).__name__}: operation failed; inspect configuration and resume saved work.'
 
 
+def ui_variant():
+    """'web' when the Next.js export is built and not overridden, else 'legacy'."""
+    if setting('UI', '').strip().lower() == 'legacy':
+        return 'legacy'
+    return 'web' if (WEB_OUT / 'index.html').is_file() else 'legacy'
+
+
 @app.get('/')
 def index():
+    if ui_variant() == 'web':
+        return FileResponse(WEB_OUT / 'index.html', headers={'Cache-Control': 'no-cache'})
     return FileResponse(ROOT / 'static/index.html')
 
 
@@ -436,3 +448,6 @@ def health():
 
 app.mount('/runs', StaticFiles(directory=RUNS), name='runs')
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
+# Next.js export assets. check_dir=False keeps startup working before a build.
+app.mount('/_next', StaticFiles(directory=WEB_OUT / '_next', check_dir=False), name='web-next')
+app.mount('/ui', StaticFiles(directory=WEB_OUT / 'ui', check_dir=False), name='web-ui')

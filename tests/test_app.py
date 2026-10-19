@@ -457,6 +457,70 @@ class DepthDurationLimitTests(unittest.TestCase):
         self.assertEqual(config.DEPTH_MAX_FRAMES, 192)
 
 
+class UiVariantTests(unittest.TestCase):
+    """FastAPI serves the Next.js export when built, else the legacy UI."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.out = Path(self.temp.name) / 'out'
+        mocked = patch.object(ui, 'WEB_OUT', self.out)
+        mocked.start()
+        self.addCleanup(mocked.stop)
+        self.client = TestClient(ui.app)
+        self.addCleanup(self.client.close)
+        self.legacy = (config.ROOT / 'static/index.html').read_text()
+
+    def build(self):
+        self.out.mkdir()
+        (self.out / 'index.html').write_text('<!doctype html><title>next studio export</title>')
+
+    def ui_setting(self, value):
+        original = ui.setting
+        return patch.object(ui, 'setting', lambda name, default='': value if name == 'UI' else original(name, default))
+
+    def test_serves_web_export_when_present(self):
+        self.build()
+        with self.ui_setting(''):
+            result = self.client.get('/')
+        self.assertEqual(result.status_code, 200)
+        self.assertIn('next studio export', result.text)
+        self.assertEqual(result.headers['cache-control'], 'no-cache')
+
+    def test_job_query_still_served_by_web_export(self):
+        self.build()
+        with self.ui_setting(''):
+            result = self.client.get('/', params={'job': 'a' * 32})
+        self.assertIn('next studio export', result.text)
+
+    def test_legacy_override_wins_even_when_export_present(self):
+        self.build()
+        for value in ('legacy', 'LEGACY', ' legacy '):
+            with self.subTest(value=value), self.ui_setting(value):
+                result = self.client.get('/')
+                self.assertEqual(result.status_code, 200)
+                self.assertEqual(result.text, self.legacy)
+
+    def test_falls_back_to_legacy_without_a_build(self):
+        with self.ui_setting(''):
+            result = self.client.get('/')
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.text, self.legacy)
+
+    def test_legacy_assets_and_api_routes_unchanged(self):
+        self.build()
+        with self.ui_setting(''):
+            self.assertEqual(self.client.get('/static/app.js').status_code, 200)
+            self.assertEqual(self.client.get('/health').json()['status'], 'ok')
+            self.assertEqual(self.client.get('/jobs/' + 'f' * 32).status_code, 404)
+            self.assertEqual(self.client.get('/_next/static/missing.js').status_code, 404)
+
+    def test_export_mounts_point_at_web_out(self):
+        mounts = {route.path: route for route in ui.app.routes if hasattr(route, 'app') and hasattr(route.app, 'directory')}
+        for path in ('/runs', '/static', '/_next', '/ui'):
+            self.assertIn(path, mounts)
+        self.assertEqual(Path(mounts['/_next'].app.directory), config.ROOT / 'web' / 'out' / '_next')
+        self.assertEqual(Path(mounts['/ui'].app.directory), config.ROOT / 'web' / 'out' / 'ui')
+
 
 if __name__ == '__main__':
     unittest.main()
