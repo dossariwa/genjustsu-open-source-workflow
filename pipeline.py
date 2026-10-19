@@ -43,21 +43,36 @@ def finish(container, stream):
     container.close()
 
 
-def normalize(src, dst):
-    """Create a separate 24 fps, <=960px video without changing the source."""
+def probe_source_duration(src):
+    """Read duration from the video stream the same way normalize does."""
     with av.open(str(src)) as inp:
         if not inp.streams.video:
             raise ValueError('The source has no video stream.')
         video = inp.streams.video[0]
-        rate = float(video.average_rate or 24)
         if video.duration is not None:
             duration = float(video.duration * video.time_base)
         elif inp.duration is not None:
             duration = float(inp.duration / av.time_base)
         else:
             raise ValueError('Video duration is unavailable; remux the source before preparation.')
-        if not math.isfinite(duration) or duration <= 0 or duration > 30:
+        if not math.isfinite(duration) or duration <= 0:
             raise ValueError('Use a nonempty clip of 30 seconds or less for this hosted workflow.')
+        return duration
+
+
+def normalized_frame_count(duration):
+    """Frame count after resampling to 24 fps; matches normalize."""
+    return max(1, math.ceil(duration * 24 - 1e-6))
+
+
+def normalize(src, dst):
+    """Create a separate 24 fps, <=960px video without changing the source."""
+    duration = probe_source_duration(src)
+    if duration > 30:
+        raise ValueError('Use a nonempty clip of 30 seconds or less for this hosted workflow.')
+    with av.open(str(src)) as inp:
+        video = inp.streams.video[0]
+        rate = float(video.average_rate or 24)
         iterator = iter(inp.decode(video=0))
         current = next(iterator, None)
         if current is None:
@@ -69,7 +84,7 @@ def normalize(src, dst):
         width = max(2, int(current.width * scale) // 2 * 2)
         height = max(2, int(current.height * scale) // 2 * 2)
         output, stream = writer(dst, width, height)
-        count = max(1, math.ceil(duration * 24 - 1e-6))
+        count = normalized_frame_count(duration)
         try:
             for index in range(count):
                 time = index / 24 + start

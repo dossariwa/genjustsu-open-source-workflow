@@ -43,3 +43,8 @@ def credential(name):
     if not value:
         raise ValueError(f'Set {name} in this project’s .env file.')
     return value
+
+# Depth / SAM raw-mask clip limit (matches spaces/sam3-raw/raw_endpoint.py and the UI).
+DEPTH_MAX_SECONDS = 8
+DEPTH_FPS = 24
+DEPTH_MAX_FRAMES = DEPTH_MAX_SECONDS * DEPTH_FPS
