@@ -4,6 +4,7 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 import json
+import re
 import tempfile
 import unittest
 
@@ -456,6 +457,172 @@ class DepthDurationLimitTests(unittest.TestCase):
         self.assertEqual(config.DEPTH_MAX_FRAMES, config.DEPTH_MAX_SECONDS * config.DEPTH_FPS)
         self.assertEqual(config.DEPTH_MAX_FRAMES, 192)
 
+
+class UiVariantTests(unittest.TestCase):
+    """FastAPI serves the Next.js export when built, else the legacy UI."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.out = Path(self.temp.name) / 'out'
+        mocked = patch.object(ui, 'WEB_OUT', self.out)
+        mocked.start()
+        self.addCleanup(mocked.stop)
+        self.client = TestClient(ui.app)
+        self.addCleanup(self.client.close)
+        self.legacy = (config.ROOT / 'static/index.html').read_text()
+
+    def build(self):
+        self.out.mkdir()
+        (self.out / 'index.html').write_text('<!doctype html><title>next studio export</title>')
+
+    def ui_setting(self, value):
+        original = ui.setting
+        return patch.object(ui, 'setting', lambda name, default='': value if name == 'UI' else original(name, default))
+
+    def test_serves_web_export_when_present(self):
+        self.build()
+        with self.ui_setting(''):
+            result = self.client.get('/')
+        self.assertEqual(result.status_code, 200)
+        self.assertIn('next studio export', result.text)
+        self.assertEqual(result.headers['cache-control'], 'no-cache')
+
+    def test_job_query_still_served_by_web_export(self):
+        self.build()
+        with self.ui_setting(''):
+            result = self.client.get('/', params={'job': 'a' * 32})
+        self.assertIn('next studio export', result.text)
+
+    def test_legacy_override_wins_even_when_export_present(self):
+        self.build()
+        for value in ('legacy', 'LEGACY', ' legacy '):
+            with self.subTest(value=value), self.ui_setting(value):
+                result = self.client.get('/')
+                self.assertEqual(result.status_code, 200)
+                self.assertEqual(result.text, self.legacy)
+
+    def test_falls_back_to_legacy_without_a_build(self):
+        with self.ui_setting(''):
+            result = self.client.get('/')
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.text, self.legacy)
+
+    def test_legacy_assets_and_api_routes_unchanged(self):
+        self.build()
+        with self.ui_setting(''):
+            self.assertEqual(self.client.get('/static/app.js').status_code, 200)
+            self.assertEqual(self.client.get('/health').json()['status'], 'ok')
+            self.assertEqual(self.client.get('/jobs/' + 'f' * 32).status_code, 404)
+            self.assertEqual(self.client.get('/_next/static/missing.js').status_code, 404)
+
+    def test_export_mounts_point_at_web_out(self):
+        mounts = {route.path: route for route in ui.app.routes if hasattr(route, 'app') and hasattr(route.app, 'directory')}
+        for path in ('/runs', '/static', '/_next', '/ui'):
+            self.assertIn(path, mounts)
+        self.assertEqual(Path(mounts['/_next'].app.directory), config.ROOT / 'web' / 'out' / '_next')
+        self.assertEqual(Path(mounts['/ui'].app.directory), config.ROOT / 'web' / 'out' / 'ui')
+
+
+class WebExportMountTests(unittest.TestCase):
+    """/_next and /ui answer a clean 404 without a build and serve once built."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.out = Path(self.temp.name) / 'out'
+        self.mounts = {route.path: route.app for route in ui.app.routes if route.path in ('/_next', '/ui')}
+        self.assertEqual(set(self.mounts), {'/_next', '/ui'})
+        for path, static in self.mounts.items():
+            original = static.directory
+            static.directory = self.out / path.strip('/')
+            self.addCleanup(setattr, static, 'directory', original)
+        self.client = TestClient(ui.app, raise_server_exceptions=True)
+        self.addCleanup(self.client.close)
+
+    def test_assets_404_without_a_build(self):
+        for url in ('/_next/static/missing.js', '/ui/favicon.svg', '/ui/hero/eyes-placeholder.webp'):
+            with self.subTest(url=url):
+                result = self.client.get(url)
+                self.assertEqual(result.status_code, 404)
+
+    def test_assets_404_in_legacy_mode_without_a_build(self):
+        with patch.object(ui, 'WEB_OUT', self.out), \
+                patch.object(ui, 'setting', lambda name, default='': 'legacy' if name == 'UI' else default):
+            self.assertIn('static/app.js', self.client.get('/').text)
+            self.assertEqual(self.client.get('/_next/static/chunks/app.js').status_code, 404)
+            self.assertEqual(self.client.get('/ui/favicon.svg').status_code, 404)
+
+    def test_assets_served_once_built(self):
+        (self.out / '_next' / 'static').mkdir(parents=True)
+        (self.out / '_next' / 'static' / 'app.js').write_text('console.log(1)')
+        (self.out / 'ui').mkdir()
+        (self.out / 'ui' / 'favicon.svg').write_text('<svg/>')
+        self.assertEqual(self.client.get('/_next/static/app.js').text, 'console.log(1)')
+        self.assertEqual(self.client.get('/ui/favicon.svg').text, '<svg/>')
+        self.assertEqual(self.client.get('/_next/static/missing.js').status_code, 404)
+
+
+def _version(text):
+    return tuple(int(part) for part in (text.split('.') + ['0', '0'])[:3])
+
+
+def _satisfies(version, node_range):
+    """Minimal npm range check for the forms used in engines fields."""
+    for alternative in node_range.split('||'):
+        alternative = alternative.strip()
+        if alternative in ('*', 'x', ''):
+            return True
+        clauses = re.findall(r'(>=|<=|>|<|\^|~|=)?\s*v?(\d+(?:\.\d+){0,2})', alternative)
+        ok = True
+        for op, raw in clauses:
+            bound = _version(raw)
+            depth = raw.count('.') + 1
+            if op == '>=':
+                ok &= version >= bound
+            elif op == '>':
+                ok &= version > bound
+            elif op == '<':
+                ok &= version < bound
+            elif op == '<=':
+                ok &= version <= bound
+            elif op == '^':
+                ok &= version >= bound and version[0] == bound[0]
+            elif op == '~':
+                ok &= version >= bound and version[:2] == bound[:2]
+            else:  # bare "20" or "20.1" means that release line
+                ok &= version[:depth] == bound[:depth]
+        if ok and clauses:
+            return True
+    return False
+
+
+class WebNodeEngineTests(unittest.TestCase):
+    """setup.sh reads the Node minimum from web/package.json; it must cover the whole tree."""
+    def test_declared_minimum_satisfies_every_locked_package(self):
+        web = config.ROOT / 'web'
+        declared = json.loads((web / 'package.json').read_text())['engines']['node']
+        match = re.match(r'^>=\s*(\d+(?:\.\d+){0,2})$', declared)
+        self.assertIsNotNone(match, 'setup.sh expects engines.node of the form ">=X.Y.Z"')
+        minimum = _version(match.group(1))
+        recommended = _version((web / '.nvmrc').read_text().strip())
+        self.assertGreaterEqual(recommended, minimum)
+        lock = json.loads((web / 'package-lock.json').read_text())
+        self.assertEqual(lock['packages']['']['engines']['node'], declared)
+        failures = []
+        for name, meta in lock['packages'].items():
+            node_range = (meta.get('engines') or {}).get('node') if isinstance(meta.get('engines'), dict) else None
+            if not name or not node_range or meta.get('optional'):
+                continue
+            for version in (minimum, (recommended[0], 0, 0)):
+                if not _satisfies(version, node_range):
+                    failures.append(f'{name} requires node {node_range} (checked {version})')
+        self.assertEqual(failures, [])
+
+    def test_satisfies_helper(self):
+        self.assertTrue(_satisfies((22, 9, 0), '^20.17.0 || >=22.9.0'))
+        self.assertFalse(_satisfies((22, 8, 0), '^20.17.0 || >=22.9.0'))
+        self.assertFalse(_satisfies((20, 19, 2), '>=22'))
+        self.assertTrue(_satisfies((24, 0, 0), '18 || 20 || >=22'))
+        self.assertFalse(_satisfies((21, 0, 0), '18 || 20 || >=22'))
 
 
 if __name__ == '__main__':

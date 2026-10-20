@@ -8,7 +8,7 @@ The dark Shinobi interface uses obsidian surfaces, crimson controls, cyan teleme
 
 ## Interface and hero reference
 
-The page structure lives in `static/index.html`, styling in `static/styles.css`, and browser behavior in `static/app.js`. Existing endpoint contracts, form names and saved-job reference identifiers remain compatible so earlier jobs can still be reviewed and collected.
+The default interface is the Next.js studio in [`web/`](web/README.md) (TypeScript, Tailwind CSS, shadcn/ui), built as a static export to `web/out` and served by FastAPI at `/`. Without a build, or with `UI=legacy`, FastAPI serves the previous interface: page structure in `static/index.html`, styling in `static/styles.css`, and browser behavior in `static/app.js`. Both UIs call the same endpoints; all gates stay server-side. Existing endpoint contracts, form names and saved-job reference identifiers remain compatible so earlier jobs can still be reviewed and collected.
 
 Use `static/assets/genjutsu_hero.webp` as the default hero reference, or select an image or GIF with the hero's local banner control. The banner is visual inspiration only and is separate from the job's submitted identity references. Download a Pinterest visual you have permission to use and choose that local file; a Pinterest page link is not an image upload. Hero selection does not submit media or start paid generation.
 
@@ -46,6 +46,8 @@ PYTHON=python3.12 bash setup.sh
 .venv/bin/python doctor.py --require-keys
 bash start.command
 ```
+
+`setup.sh` builds the web UI when Node.js 22.13+ is installed (Node 24 LTS recommended, see `web/.nvmrc`) and otherwise prints a clear warning and keeps the legacy UI; rebuild manually with `cd web && npm ci && npm run build`. For frontend work run `npm run dev` in `web/` (proxies the API to :8770) or `npm run dev:mock` (no backend). Set `UI=legacy` in `.env` to keep the previous interface.
 
 The UI binds to [127.0.0.1:8770](http://127.0.0.1:8770). `PORT=8771 bash start.command` selects another port. A running UI is distinct from generation readiness. Setup and doctor never upload user media, submit inference or purchase credits.
 
@@ -85,6 +87,7 @@ OpenArt state is written before remote side effects. Restart and resume collect 
 .venv/bin/python -m unittest discover -s tests
 .venv/bin/python test_composite.py
 node --check static/app.js
+(cd web && npm run check && npm run build)
 .venv/bin/python doctor.py
 .venv/bin/python doctor.py --require-keys
 ```
