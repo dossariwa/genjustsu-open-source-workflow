@@ -1,5 +1,10 @@
 import { ApiError, type StudioApi } from "./types";
 
+function responseError(body: unknown, status: number) {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  return new ApiError(typeof detail === "string" ? detail : "The request could not be completed.", status);
+}
+
 /** Same error contract as static/app.js: surface FastAPI's string `detail`. */
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -10,8 +15,7 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
     body = null;
   }
   if (!response.ok) {
-    const detail = (body as { detail?: unknown } | null)?.detail;
-    throw new ApiError(typeof detail === "string" ? detail : "The request could not be completed.", response.status);
+    throw responseError(body, response.status);
   }
   return body as T;
 }
@@ -39,5 +43,9 @@ export const httpApi: StudioApi = {
   runUrl: (id, file) => `/runs/${id}/${file}`,
   exists: async (id, file) => (await fetch(`/runs/${id}/${file}`, { method: "HEAD", cache: "no-store" })).ok,
   runJson: (id, file) => json(`/runs/${id}/${file}`),
-  runBlob: async (id, file) => (await fetch(`/runs/${id}/${file}`)).blob(),
+  runBlob: async (id, file) => {
+    const response = await fetch(`/runs/${id}/${file}`);
+    if (!response.ok) throw responseError(await response.json().catch(() => null), response.status);
+    return response.blob();
+  },
 };

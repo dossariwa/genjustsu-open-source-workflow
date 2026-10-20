@@ -4,6 +4,7 @@ import { ArrowLeft, Download, ExternalLink, Lock, SlidersHorizontal } from "luci
 import { Button } from "@/components/ui/button";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import type { StepId } from "@/lib/studio/constants";
+import { audioRestoration } from "@/lib/studio/audio-restoration";
 import type { Studio } from "@/lib/studio/use-studio";
 import { FooterHint, Hint, Panel, PanelColumns } from "./panel";
 import { ManualImport } from "./manual-import";
@@ -14,15 +15,9 @@ export function RestorePanel({ studio, go }: { studio: Studio; go: (step: StepId
     studio;
   const gen = capabilities?.generation ?? {};
   const hdSupported = gen.video_hd_supported === true;
-  const converted = capabilities?.final_audio_source === "elevenlabs_sts";
+  const audio = audioRestoration(finalPreview?.audioMode);
   const legacyProvider = generation?.provider === "dreamina-canvas" || generation?.mode === "m2v";
-  const audioLabel = !finalPreview
-    ? converted
-      ? "CONVERTED VOICE + ESTIMATED BACKGROUND"
-      : "DRAFT PREVIEW"
-    : (finalPreview.hd ? "1080P" : "DRAFT") +
-      " · " +
-      (finalPreview.audioMode === "original" ? "ORIGINAL AUDIO" : finalPreview.audioMode === "elevenlabs_sts" ? "CONVERTED VOICE" : "AUDIO MODE UNVERIFIED");
+  const audioLabel = finalPreview ? `${finalPreview.hd ? "1080P" : "DRAFT"} · ${audio.quality}` : "DRAFT PREVIEW";
   // Same gate as static/app.js. With video_hd_supported=false (current backend) it stays disabled.
   const upgradeDisabled =
     !finalPreview || finalPreview.hd || busy || !maskApproved || generation?.provider !== "openart" || !hdSupported || hd?.state === "running";
@@ -51,10 +46,10 @@ export function RestorePanel({ studio, go }: { studio: Studio; go: (step: StepId
       id="final"
       number="04"
       eyebrow="音 / RESTORE & EXPORT"
-      title="New identity. Original soundtrack."
+      title={audio.title}
       badge="AUDIO RESTORATION"
       badgeTone="info"
-      status={finalPreview && status.tone === "neutral" ? { text: "Preview ready with original audio.", tone: "success" } : status}
+      status={finalPreview && status.tone === "neutral" ? { text: audio.ready, tone: audio.verified ? "success" : "neutral" } : status}
       footer={
         <>
           <Button variant="outline" size="lg" className="h-10" onClick={() => go("substitute")}>
@@ -97,9 +92,9 @@ export function RestorePanel({ studio, go }: { studio: Studio; go: (step: StepId
               </div>
             )}
             <Hint id="audio-mode-note">
-              {converted
-                ? "Voice-conversion export is explicitly configured: converted vocals + estimated residual mix. This is not the original soundtrack. Generated audio is discarded."
-                : "Original audio packets are restored byte-for-byte without re-encoding by default; generated audio is discarded. Explicit voice-conversion exports use converted vocals plus an estimated residual mix."}
+              {finalPreview
+                ? audio.note
+                : "The job's saved preparation determines the restored audio. Review the saved restoration metadata and soundtrack once the output is ready."}
             </Hint>
           </>
         }

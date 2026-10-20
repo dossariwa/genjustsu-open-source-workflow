@@ -60,9 +60,9 @@ export function Panel({
 /** Two-column body; each column scrolls on its own so the page never does (≥1024px). */
 export function PanelColumns({ main, aside, className }: { main: React.ReactNode; aside: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("grid h-full gap-6 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-8 lg:px-6 lg:py-4", className)}>
-      <div className="flex min-h-0 flex-col gap-3 lg:overflow-y-auto lg:pr-1">{main}</div>
-      <div className="flex min-h-0 flex-col gap-3 lg:overflow-y-auto lg:pr-1">{aside}</div>
+    <div className={cn("grid h-full grid-cols-1 gap-6 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-8 lg:px-6 lg:py-4", className)}>
+      <div className="flex min-h-0 min-w-0 flex-col gap-3 lg:overflow-y-auto lg:pr-1">{main}</div>
+      <div className="flex min-h-0 min-w-0 flex-col gap-3 lg:overflow-y-auto lg:pr-1">{aside}</div>
     </div>
   );
 }

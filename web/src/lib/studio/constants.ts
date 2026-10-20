@@ -6,7 +6,7 @@ export const STEPS: { id: StepId; index: string; title: string; short: string; k
   { id: "prepare", index: "01", title: "Prepare", short: "Prepare", kanji: "源", tag: "SOURCE", lockedHint: "" },
   { id: "inspect", index: "02", title: "Inspect", short: "Inspect", kanji: "眼", tag: "VISUAL GATE", lockedHint: "Locked · prepare your video first" },
   { id: "substitute", index: "03", title: "Substitute", short: "Substitute", kanji: "術", tag: "KAWARIMI", lockedHint: "Locked · approve the input review first" },
-  { id: "restore", index: "04", title: "Restore & Export", short: "Export", kanji: "音", tag: "ORIGINAL AUDIO", lockedHint: "Locked · unlocks when your draft is ready" },
+  { id: "restore", index: "04", title: "Restore & Export", short: "Export", kanji: "音", tag: "AUDIO RESTORATION", lockedHint: "Locked · unlocks when your draft is ready" },
 ];
 
 /** Same preview set and captions as static/app.js. */

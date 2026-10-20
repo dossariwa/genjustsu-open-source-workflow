@@ -52,7 +52,7 @@ export function InspectPanel({ studio, go }: { studio: Studio; go: (step: StepId
           ) : (
             <>
               <Tabs value={active.file} onValueChange={setSelected}>
-                <TabsList aria-label="Preview selection" className="h-9! bg-inset">
+                <TabsList aria-label="Preview selection" className="h-auto! min-h-9 max-w-full flex-wrap bg-inset sm:h-9! sm:flex-nowrap">
                   {previews.map((item) => (
                     <TabsTrigger key={item.file} value={item.file} className="px-3">
                       {item.label}

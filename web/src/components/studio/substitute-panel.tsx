@@ -307,7 +307,7 @@ export function SubstitutePanel({ studio, go }: { studio: Studio; go: (step: Ste
         >
           {suggesting ? <LoaderCircle className="animate-spin" /> : <Sparkles />} Suggest prompt with OpenAI
         </Button>
-        <Hint className="min-w-0 flex-1">
+        <Hint className="min-w-0 basis-full sm:flex-1">
           Image references only. Verify Scribe dialogue and identity mapping.{promptTouched ? " Edited by you." : ""}
         </Hint>
       </div>
