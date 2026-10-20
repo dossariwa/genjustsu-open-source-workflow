@@ -20,6 +20,19 @@ Requires Node.js **22.13+**; **Node 24 LTS is recommended** (`web/.nvmrc`). The 
 | `npm run build` | Static export to `web/out` — FastAPI serves it at `/` automatically |
 | `npm run build:mock` | Static export using the mock API (used for Vercel previews only; `vercel.json` skips production builds via `ignoreCommand` when `VERCEL_ENV=production`) |
 | `npm run lint` / `npm run typecheck` / `npm run check` | ESLint / `tsc --noEmit` / both |
+| `npm test` / `npm run test:watch` | Vitest + React Testing Library regression suite / watch mode |
+
+The regression suite exercises tab-state retention, stale job response isolation,
+failed reference downloads, and audio-restoration messages with mocked APIs. It
+does not contact providers or establish live video-generation readiness.
+Run the suite and both builds on Node 24 before merging. The shadcn CLI and its
+build-time CSS are development dependencies; install development dependencies
+when building.
+
+See [the dependency advisory assessment](../docs/SECURITY-ADVISORIES.md) for the
+remaining tooling-only audit findings, and [production requirements](../docs/PRODUCTION.md)
+for the planned private FastAPI host. Vercel Preview remains mock-only; production
+build restrictions remain until real backend integration and validation are complete.
 
 ## How FastAPI serves it
 
