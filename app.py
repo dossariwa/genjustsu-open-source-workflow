@@ -8,7 +8,7 @@ import shutil
 import threading
 import uuid
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from config import ROOT, setting, DEPTH_MAX_SECONDS, DEPTH_MAX_FRAMES, DEPTH_FPS
 
@@ -449,5 +449,20 @@ def health():
 app.mount('/runs', StaticFiles(directory=RUNS), name='runs')
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
 # Next.js export assets. check_dir=False keeps startup working before a build.
-app.mount('/_next', StaticFiles(directory=WEB_OUT / '_next', check_dir=False), name='web-next')
-app.mount('/ui', StaticFiles(directory=WEB_OUT / 'ui', check_dir=False), name='web-ui')
+class OptionalStaticFiles(StaticFiles):
+    """Serves the Next.js export's assets; a clean 404 while web/out is not built."""
+
+    def __init__(self, directory):
+        super().__init__(directory=directory, check_dir=False)
+
+    async def __call__(self, scope, receive, send):
+        if not Path(self.directory).is_dir():
+            await PlainTextResponse('Not Found', status_code=404)(scope, receive, send)
+            return
+        # The export may be built after startup; always look up the current directory.
+        self.all_directories = [self.directory]
+        await super().__call__(scope, receive, send)
+
+
+app.mount('/_next', OptionalStaticFiles(WEB_OUT / '_next'), name='web-next')
+app.mount('/ui', OptionalStaticFiles(WEB_OUT / 'ui'), name='web-ui')
