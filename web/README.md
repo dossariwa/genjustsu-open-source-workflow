@@ -10,7 +10,7 @@ UX only — the server stays authoritative.
 
 ## Commands
 
-Requires Node.js 20.9+ (22+ recommended).
+Requires Node.js **22.13+**; **Node 24 LTS is recommended** (`web/.nvmrc`). The minimum comes from the dependency tree (`engines` in the lockfile, e.g. `cn` needs 22+ and `eslint-visitor-keys` needs ^22.13) and is enforced by `engine-strict` in `web/.npmrc`; `package.json` `engines` is the single source of truth that `setup.sh` reads.
 
 | Command | What it does |
 | --- | --- |
@@ -18,7 +18,7 @@ Requires Node.js 20.9+ (22+ recommended).
 | `npm run dev` | Dev server on :3000; proxies `/capabilities`, `/telemetry`, `/health`, `/jobs/*`, `/runs/*`, `/static/*` to FastAPI at `127.0.0.1:8770` (override with `GENJUSTSU_API_ORIGIN`). Start the backend with `bash start.command`. |
 | `npm run dev:mock` | Dev server with the in-browser **mock API** (no backend needed) |
 | `npm run build` | Static export to `web/out` — FastAPI serves it at `/` automatically |
-| `npm run build:mock` | Static export using the mock API (used for Vercel previews only) |
+| `npm run build:mock` | Static export using the mock API (used for Vercel previews only; `vercel.json` skips production builds via `ignoreCommand` when `VERCEL_ENV=production`) |
 | `npm run lint` / `npm run typecheck` / `npm run check` | ESLint / `tsc --noEmit` / both |
 
 ## How FastAPI serves it
@@ -26,8 +26,10 @@ Requires Node.js 20.9+ (22+ recommended).
 * `GET /` returns `web/out/index.html` when it exists; `/_next/*` and `/ui/*` serve the export's assets.
 * `UI=legacy` (env or `.env`) forces the previous `static/` interface. Without a build, the legacy UI is
   served automatically. `/runs`, `/static` and every API route are unchanged.
-* `bash setup.sh` builds `web/out` when Node 20.9+ is present and skips it otherwise (`SKIP_WEB_BUILD=1`
-  to skip explicitly). A failed web build never fails the Python setup.
+* `bash setup.sh` builds `web/out` when Node 22.13+ is present (24 recommended) and skips it otherwise
+  (`SKIP_WEB_BUILD=1` to skip explicitly). A missing/old Node or a failed build prints a prominent warning that the
+  legacy UI will be served and why; it never fails the Python setup.
+* With no build, `/_next/*` and `/ui/*` return a plain 404 (no server error).
 
 ## Mock API mode (`NEXT_PUBLIC_API_MODE=mock`)
 

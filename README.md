@@ -47,7 +47,7 @@ PYTHON=python3.12 bash setup.sh
 bash start.command
 ```
 
-`setup.sh` builds the web UI when Node.js 20.9+ is installed and skips it otherwise; rebuild manually with `cd web && npm ci && npm run build`. For frontend work run `npm run dev` in `web/` (proxies the API to :8770) or `npm run dev:mock` (no backend). Set `UI=legacy` in `.env` to keep the previous interface.
+`setup.sh` builds the web UI when Node.js 22.13+ is installed (Node 24 LTS recommended, see `web/.nvmrc`) and otherwise prints a clear warning and keeps the legacy UI; rebuild manually with `cd web && npm ci && npm run build`. For frontend work run `npm run dev` in `web/` (proxies the API to :8770) or `npm run dev:mock` (no backend). Set `UI=legacy` in `.env` to keep the previous interface.
 
 The UI binds to [127.0.0.1:8770](http://127.0.0.1:8770). `PORT=8771 bash start.command` selects another port. A running UI is distinct from generation readiness. Setup and doctor never upload user media, submit inference or purchase credits.
 
